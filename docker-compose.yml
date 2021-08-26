@@ -1,0 +1,20 @@
+version: '3'
+  
+services:
+  tsuki:
+    image: tsuki:latest
+    container_name: tsuki
+    restart: on-failure
+    volumes:
+      - ./:/tsuki
+    networks:
+      app_net:
+        ipv4_address: 10.4.0.10
+
+networks:
+  app_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.4.0.0/16
