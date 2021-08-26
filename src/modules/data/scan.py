@@ -137,9 +137,6 @@ class FileScan:
         result = ''
         if stats['malicious']:
             result = "<b>%d</b> engine(s) flagged this file as malicious! (may be a false positive)\n\n" % stats['malicious']
-            for key, val in an['attributes']['results'].items():
-                if an['attributes']['results'][key]['result']:
-                    result += f"<code>{key}: {str(an['attributes']['results'][key]['result'])}</code>\n"
         else:
             result = "Virustotal: nothing suspicious.\n"
 
