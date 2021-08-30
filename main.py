@@ -28,6 +28,8 @@ import vt
 class Env:
     API_TOKEN: str
     VIRUSTOTAL_KEY: str
+    FORWARD_DOWNLOAD: int
+    FORWARD_CHANNEL: int
     REDIS_PORT: int
     REDIS_HOST: str
     REDIS_DB: int

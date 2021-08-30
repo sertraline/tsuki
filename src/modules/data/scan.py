@@ -1,4 +1,5 @@
 import asyncio
+import aio_pika
 import hashlib
 import traceback
 import subprocess
@@ -29,17 +30,29 @@ class FileScan:
 
         self.vt_client = essence.vt_client
         self.progress = False
+        self.forward_downloads = essence.env.FORWARD_DOWNLOAD
 
         self.dp.register_message_handler(self.parse, content_types=[types.ContentType.DOCUMENT])
+        if self.forward_downloads:
+            self.forward_channel = essence.env.FORWARD_CHANNEL
+            asyncio.get_event_loop().create_task(self.scan_runner())
 
-    async def run_progress(self, message):
+    async def run_progress(self, message, chat_id=None, m_id=None):
         self.progress = True
         forward = 0
         back = 10
-        msg = await message.reply("<code>Scan in progress\n[%s/%s]</code>" % (
+
+        text = "Scan in progress\n[%s/%s]" % (
             '/' * forward, ' ' * back
-        ), parse_mode=types.ParseMode.HTML)
+        )
+        if message:
+            msg = await message.reply(text)
+        else:
+            msg = await self.bot.send_message(chat_id=chat_id,
+                                              reply_to_message_id=m_id,
+                                              text=text)
         while self.progress:
+            await asyncio.sleep(5)
             forward += 1
             back -= 1
             if back <= 0:
@@ -49,13 +62,72 @@ class FileScan:
                                              message_id=msg['message_id'],
                                              text="Scan in progress\n[%s/%s]" % (
                                                  '/' * forward, ' ' * back
-                                             ),
-                                             parse_mode=types.ParseMode.HTML
-                                             )
-            await asyncio.sleep(5)
-        await asyncio.sleep(1)
+                                             ))
         await self.bot.delete_message(chat_id=msg['chat']['id'],
                                       message_id=msg['message_id'])
+
+    async def scan_runner(self):
+        connection = await aio_pika.connect_robust(
+            "amqp://guest:guest@127.0.0.1/", loop=asyncio.get_event_loop()
+        )
+        async with connection:
+            channel = await connection.channel()
+            queue = await channel.declare_queue('download_results', auto_delete=True)
+
+            async with queue.iterator() as queue_iter:
+                async for message in queue_iter:
+                    async with message.process():
+                        data = message.body.decode('utf-8').split('_')
+                        path, mime, chat, m_id = data
+                        await self.process_file(path, mime, chat, m_id)
+
+    async def publish_message(self, message):
+        connection = await aio_pika.connect_robust(
+            "amqp://guest:guest@127.0.0.1/", loop=asyncio.get_event_loop()
+        )
+        async with connection:
+            routing_key = "download_forward"
+
+            channel = await connection.channel()
+
+            await channel.default_exchange.publish(
+                aio_pika.Message(body=message.encode()),
+                routing_key=routing_key,
+            )
+
+    async def process_file(self, path, mime, chat, message_id):
+        self.logger.debug('Processing file at path "%s"' % path)
+        sha256_hash = hashlib.sha256()
+        with open(path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+
+        check = await self.scan.get_scan(sha256_hash.hexdigest())
+        if check:
+            await self.bot.send_message(chat_id=chat,
+                                        reply_to_message_id=message_id,
+                                        text=check['scan_result'],
+                                        parse_mode=types.ParseMode.HTML)
+            return
+
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.run_progress(None, chat, message_id))
+
+        try:
+            if mime == 'application/pdf':
+                result = await self.check_pdf(path)
+            else:
+                result = await self.check_exe(path, sha256_hash)
+        except:
+            self.logger.debug(traceback.format_exc())
+        else:
+            await self.bot.send_message(chat_id=chat,
+                                        reply_to_message_id=message_id,
+                                        text=result,
+                                        parse_mode=types.ParseMode.HTML)
+            await self.scan.insert_scan(sha256_hash.hexdigest(), result)
+        finally:
+            self.progress = False
 
     async def parse(self, message, state):
         if not any([i if i == message.document['mime_type'] else '' for i in self.check]):
@@ -71,37 +143,26 @@ class FileScan:
         if message.document['file_size'] > 19999999:
             return
 
+        if self.forward_downloads:
+            await self.bot.forward_message(chat_id=self.forward_channel,
+                                           from_chat_id=message['chat']['id'],
+                                           message_id=message['message_id'])
+            payload = (f"{message['chad']['id']}_"
+                       f"{message['message_id']}_"
+                       f"{message.document['mime_type']}_"
+                       f"{message.document['file_unique_id']}")
+            await self.publish_message(payload)
+            return
         try:
             self.logger.debug("Download started for %s" % message)
             await self.bot.download_file_by_id(document, temp)
         except FileIsTooBig:
             return
 
-        sha256_hash = hashlib.sha256()
-        with open(temp, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-
-        check = await self.scan.get_scan(sha256_hash.hexdigest())
-        if check:
-            await message.reply(check['scan_result'], parse_mode=types.ParseMode.HTML)
-            return
-
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.run_progress(message))
-
-        try:
-            if message.document['mime_type'] == 'application/pdf':
-                result = await self.check_pdf(temp)
-            else:
-                result = await self.check_exe(temp, sha256_hash)
-        except:
-            self.logger.debug(traceback.format_exc())
-        else:
-            await message.reply(result, parse_mode=types.ParseMode.HTML)
-            await self.scan.insert_scan(sha256_hash.hexdigest(), result)
-        finally:
-            self.progress = False
+        await self.process_file(temp,
+                                message.document['mime_type'],
+                                message['chat']['id'],
+                                message['message_id'])
 
     async def check_exe(self, temp, sha256_hash):
         loop = asyncio.get_event_loop()
