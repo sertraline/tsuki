@@ -95,7 +95,7 @@ class ErrorLevelAnalysis:
 
 def sweep(path, dirname):
     temp = os.path.join(dirname, 'temp.jpg')
-    x = Image.open(path)
+    x = Image.open(path).convert('RGB')
     x.save(temp, quality=90)
 
     # sweep1 = 100 inb

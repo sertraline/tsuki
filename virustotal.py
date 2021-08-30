@@ -36,7 +36,7 @@ async def push(result):
     )
     async with connection:
         routing_key = "virustotal_results"
-    
+
         channel = await connection.channel()
 
         await channel.default_exchange.publish(
