@@ -77,7 +77,7 @@ def main():
                     async with queue.iterator() as queue_iter:
                         async for message in queue_iter:
                             print('message')
-                            async with message.process(ignore_processed=True):
+                            async with message.process():
                                 data = message.body.decode('utf-8').split('_')
                                 chat_id, m_id, mime, forward = data
                                 forward = datetime.datetime.utcfromtimestamp(int(forward))
@@ -94,7 +94,7 @@ def main():
                                     print('Download complete, push %s' % payload)
                                     await push(payload)
                                 else:
-                                    await message.reject()
+                                    await message.reject(requeue=True)
                 await asyncio.sleep(2)
                 attempts -= 1
 
