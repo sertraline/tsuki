@@ -15,7 +15,9 @@ from uuid import uuid4
 class FileScan:
     check = [
         'image',
-        'video'
+        'video',
+        'audio',
+        'sound'
     ]
 
     def __init__(self, essence):
@@ -155,7 +157,7 @@ class FileScan:
             self.progress = False
 
     async def parse(self, message, state):
-        if not any([i if i not in message.document['mime_type'] else None for i in self.check]):
+        if any([i if i in message.document['mime_type'] else None for i in self.check]):
             return
 
         file_name = str(uuid4())[:6] + message.document.file_name 
@@ -169,16 +171,13 @@ class FileScan:
         if self.forward_downloads and message.document['mime_type'] != 'application/pdf':
             if message.document['file_size'] > 100000000:
                 return
-            await self.bot.forward_message(chat_id=-self.forward_channel,
-                                           from_chat_id=message['chat']['id'],
-                                           message_id=message['message_id'])
-            self.logger.debug(message['date'])
-            if 'forward_date' in message:
-                self.logger.debug(message['forward_date'])
+            msg = await self.bot.forward_message(chat_id=-self.forward_channel,
+                                                 from_chat_id=message['chat']['id'],
+                                                 message_id=message['message_id'])
             payload = (f"{message['chat']['id']}_"
                        f"{message['message_id']}_"
                        f"{message.document['mime_type']}_"
-                       f"{round(message['date'].timestamp())}")
+                       f"{msg['message_id']}")
             await self.publish_message(payload)
             return
         if message.document['file_size'] > 19999999:

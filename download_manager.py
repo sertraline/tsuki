@@ -2,6 +2,9 @@ from telethon.sync import TelegramClient, events
 from telethon.tl.types import InputPeerChat
 from dataclasses import dataclass
 from uuid import uuid4
+
+from src.logger import DebugLogging
+
 import datetime
 import aio_pika
 import asyncio
@@ -44,65 +47,56 @@ async def push(result):
             routing_key=routing_key,
         )
 
+async def consumer(client, env):
+    logger = DebugLogging(True).logger
+
+    loop = asyncio.get_event_loop()
+    connection = await aio_pika.connect_robust(
+        "amqp://guest:guest@127.0.0.1/", loop=loop
+    )
+    queue_name = "download_forward"
+ 
+    logger.debug('Telethon login')
+    await client.start()
+
+    async with connection:
+        channel = await connection.channel()
+        queue = await channel.declare_queue(queue_name, auto_delete=True, durable=True)
+
+        async with queue.iterator() as queue_iter:
+            async for message in queue_iter:
+                async with message.process():
+                    data = message.body.decode('utf-8').split('_')
+                    chat_id, m_id, mime, forward = data
+
+                    entity = await client.get_entity(int(env.FORWARD_CHANNEL))
+                    chann_msg = await client.get_messages(entity, ids=int(forward))
+
+                    filename = chann_msg.media.document.attributes[0].file_name
+                    logger.debug('Received message <%d> file name <%s>' % (int(forward), filename))
+                    media = chann_msg.media.document
+                    path = os.path.abspath(
+                        os.path.join(env.CONTENT_DIR, str(uuid4())[:8]+filename)
+                    )
+                    await client.download_media(media, file=path)
+                    payload = f'{path}\n{mime}\n{chat_id}\n{m_id}'
+                    logger.debug('Download complete, push %s' % payload)
+                    await push(payload)
 
 def main():
     env = Env()
     if not os.path.isdir(env.CONTENT_DIR):
         os.mkdir(env.CONTENT_DIR)
-    with TelegramClient('session', env.TELETHON_API_KEY, env.TELETHON_API_HASH) as client:
-        @client.on(events.NewMessage(chats=int(env.FORWARD_CHANNEL)))
-        async def handler(event):
-            print(event)
-            # fwd_from=MessageFwdHeader(date=datetime.datetime(2021, 8, 30, 6, 43, 40, tzinfo=datetime.timezone.utc)
-            try:
-                stamp = event.date
-            except AttributeError as e:
-                print(e)
-                return
-            media = event.media.document
-            print('connect')
-            connection = await aio_pika.connect_robust(
-                "amqp://guest:guest@127.0.0.1/"
-            )
-            print('connected')
-            queue_name = "download_forward"
 
-            attempts = 60
-            while attempts:
-                async with connection:
-                    channel = await connection.channel()
-                    queue = await channel.declare_queue(queue_name, auto_delete=True)
-
-                    print('iter')
-                    async with queue.iterator() as queue_iter:
-                        async for message in queue_iter:
-                            print('message')
-                            async with message.process():
-                                data = message.body.decode('utf-8').split('_')
-                                chat_id, m_id, mime, forward = data
-                                forward = datetime.datetime.utcfromtimestamp(int(forward))
-                                forward = forward.replace(tzinfo=datetime.timezone.utc)
-                                print(forward, stamp)
-                                if forward == stamp:
-                                    print('Received message')
-                                    filename = event.media.document.attributes[0].file_name
-                                    path = os.path.abspath(
-                                        os.path.join(env.CONTENT_DIR, str(uuid4())[:8]+filename)
-                                    )
-                                    await client.download_media(media, file=path)
-                                    payload = f'{path}\n{mime}\n{chat_id}\n{m_id}'
-                                    print('Download complete, push %s' % payload)
-                                    await push(payload)
-                                else:
-                                    await message.reject(requeue=True)
-                await asyncio.sleep(2)
-                attempts -= 1
-
-        InputPeerChat(int(env.FORWARD_CHANNEL))
-        client.run_until_disconnected()
-
+    client = TelegramClient('session', env.TELETHON_API_KEY, env.TELETHON_API_HASH)
+    loop = asyncio.get_event_loop()
+    loop.create_task(consumer(client, env))
+    loop.run_forever()
 
 if __name__ in '__main__':
     if os.name != 'nt':
         uvloop.install()
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(e)
