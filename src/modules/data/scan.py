@@ -8,17 +8,14 @@ import re
 
 from aiogram import types
 from aiogram.utils.exceptions import FileIsTooBig
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 
 class FileScan:
     check = [
-        'application/x-ms-dos-executable',
-        'application/pdf',
-        'application/zip',
-        'application/rar'
-        'application/x-rar-compressed',
-        'application/x-zip-compressed',
+        'image',
+        'video'
     ]
 
     def __init__(self, essence):
@@ -34,7 +31,7 @@ class FileScan:
 
         self.dp.register_message_handler(self.parse, content_types=[types.ContentType.DOCUMENT])
         if self.forward_downloads:
-            self.forward_channel = essence.env.FORWARD_CHANNEL
+            self.forward_channel = int(essence.env.FORWARD_CHANNEL)
             asyncio.get_event_loop().create_task(self.scan_runner())
 
     async def run_progress(self, message, chat_id=None, m_id=None):
@@ -67,19 +64,46 @@ class FileScan:
                                       message_id=msg['message_id'])
 
     async def scan_runner(self):
-        connection = await aio_pika.connect_robust(
-            "amqp://guest:guest@127.0.0.1/", loop=asyncio.get_event_loop()
-        )
-        async with connection:
-            channel = await connection.channel()
-            queue = await channel.declare_queue('download_results', auto_delete=True)
+        connection = None
+        while True:
+            try:
+                connection = await aio_pika.connect_robust(
+                    "amqp://guest:guest@127.0.0.1/", loop=asyncio.get_event_loop()
+                )
+                self.logger.debug('aio_pika: Connection established')
+                break
+            except:
+                self.logger.debug('Connection error. Is rabbitmq-server running?')
+                await asyncio.sleep(1)
+                continue
+        while True:
+            async with connection:
+                channel = await connection.channel()
+                queue = await channel.declare_queue('virustotal_results', auto_delete=True)
 
-            async with queue.iterator() as queue_iter:
-                async for message in queue_iter:
-                    async with message.process():
-                        data = message.body.decode('utf-8').split('_')
-                        path, mime, chat, m_id = data
-                        await self.process_file(path, mime, chat, m_id)
+                async with queue.iterator() as queue_iter:
+                    self.logger.debug('iter')
+                    async for message in queue_iter:
+                        self.logger.debug('process')
+                        async with message.process():
+                            data = message.body.decode('utf-8').split('\n')
+                            sha256 = data[0]
+                            result = int(data[1])
+                            message_id = data[-1]
+                            chat_id = data[-2]
+
+                            if result > 0:
+                                query = '%d engines flagged this file as malicious! (may be a false positive)' % result
+                            else:
+                                query = 'Virustotal: file contains no viruses.'
+                            query += f'\nhttps://www.virustotal.com/gui/file/{sha256}/detection'
+
+                            await self.bot.send_message(chat_id=chat_id,
+                                                        reply_to_message_id=message_id,
+                                                        text=query,
+                                                        parse_mode=types.ParseMode.HTML)
+
+            await asyncio.sleep(1)
 
     async def publish_message(self, message):
         connection = await aio_pika.connect_robust(
@@ -90,6 +114,7 @@ class FileScan:
 
             channel = await connection.channel()
 
+            self.logger.debug('Publish message %s' % message)
             await channel.default_exchange.publish(
                 aio_pika.Message(body=message.encode()),
                 routing_key=routing_key,
@@ -130,7 +155,7 @@ class FileScan:
             self.progress = False
 
     async def parse(self, message, state):
-        if not any([i if i == message.document['mime_type'] else '' for i in self.check]):
+        if not any([i if i not in message.document['mime_type'] else None for i in self.check]):
             return
 
         file_name = str(uuid4())[:6] + message.document.file_name 
@@ -140,18 +165,23 @@ class FileScan:
         temp = os.path.join(dirname, file_name)
 
         document = message.document['file_id']
-        if message.document['file_size'] > 19999999:
-            return
 
-        if self.forward_downloads:
-            await self.bot.forward_message(chat_id=self.forward_channel,
+        if self.forward_downloads and message.document['mime_type'] != 'application/pdf':
+            if message.document['file_size'] > 100000000:
+                return
+            await self.bot.forward_message(chat_id=-self.forward_channel,
                                            from_chat_id=message['chat']['id'],
                                            message_id=message['message_id'])
-            payload = (f"{message['chad']['id']}_"
+            self.logger.debug(message['date'])
+            if 'forward_date' in message:
+                self.logger.debug(message['forward_date'])
+            payload = (f"{message['chat']['id']}_"
                        f"{message['message_id']}_"
                        f"{message.document['mime_type']}_"
-                       f"{message.document['file_unique_id']}")
+                       f"{round(message['date'].timestamp())}")
             await self.publish_message(payload)
+            return
+        if message.document['file_size'] > 19999999:
             return
         try:
             self.logger.debug("Download started for %s" % message)
