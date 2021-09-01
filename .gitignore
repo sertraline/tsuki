@@ -1,6 +1,7 @@
 # Telegram database
 *.db
 *.session
+*.session-journal
 *.html
 
 config.py

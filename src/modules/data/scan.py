@@ -29,42 +29,12 @@ class FileScan:
         self.content = essence.env.CONTENT_DIR
 
         self.vt_client = essence.vt_client
-        self.progress = False
         self.forward_downloads = essence.env.FORWARD_DOWNLOAD
 
         self.dp.register_message_handler(self.parse, content_types=[types.ContentType.DOCUMENT])
         if self.forward_downloads:
             self.forward_channel = int(essence.env.FORWARD_CHANNEL)
             asyncio.get_event_loop().create_task(self.scan_runner())
-
-    async def run_progress(self, message, chat_id=None, m_id=None):
-        self.progress = True
-        forward = 0
-        back = 10
-
-        text = "Scan in progress\n[%s/%s]" % (
-            '/' * forward, ' ' * back
-        )
-        if message:
-            msg = await message.reply(text)
-        else:
-            msg = await self.bot.send_message(chat_id=chat_id,
-                                              reply_to_message_id=m_id,
-                                              text=text)
-        while self.progress:
-            await asyncio.sleep(5)
-            forward += 1
-            back -= 1
-            if back <= 0:
-                back = 10
-                forward = 0
-            await self.bot.edit_message_text(chat_id=msg['chat']['id'],
-                                             message_id=msg['message_id'],
-                                             text="Scan in progress\n[%s/%s]" % (
-                                                 '/' * forward, ' ' * back
-                                             ))
-        await self.bot.delete_message(chat_id=msg['chat']['id'],
-                                      message_id=msg['message_id'])
 
     async def scan_runner(self):
         connection = None
@@ -138,9 +108,6 @@ class FileScan:
                                         parse_mode=types.ParseMode.HTML)
             return
 
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.run_progress(None, chat, message_id))
-
         try:
             if mime == 'application/pdf':
                 result = await self.check_pdf(path)
@@ -154,8 +121,6 @@ class FileScan:
                                         text=result,
                                         parse_mode=types.ParseMode.HTML)
             await self.scan.insert_scan(sha256_hash.hexdigest(), result)
-        finally:
-            self.progress = False
 
     async def parse(self, message, state):
         if any([i if i in message.document['mime_type'] else None for i in self.check]):
@@ -220,7 +185,6 @@ class FileScan:
         if check:
             check = re.findall(r'.*?/JS +0.*?', result, flags=re.MULTILINE)
         self.logger.debug("Scan result: <%s, %s>" % (check, result))
-        self.progress = False
 
         if not check and result:
             return f"This file contains javascript!\n<code>{result}</code>"
