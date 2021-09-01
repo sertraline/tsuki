@@ -7,7 +7,7 @@ import os
 import re
 
 from aiogram import types
-from aiogram.utils.exceptions import FileIsTooBig
+from aiogram.utils.exceptions import FileIsTooBig, TelegramAPIError
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -17,7 +17,8 @@ class FileScan:
         'image',
         'video',
         'audio',
-        'sound'
+        'sound',
+        'text'
     ]
 
     def __init__(self, essence):
@@ -95,9 +96,9 @@ class FileScan:
                             chat_id = data[-2]
 
                             if result > 0:
-                                query = '%d engines flagged this file as malicious! (may be a false positive)' % result
+                                query = '%d engines flagged this file as malicious!' % result
                             else:
-                                query = 'Virustotal: file contains no viruses.'
+                                query = 'Virustotal report: no threats found.'
                             query += f'\nhttps://www.virustotal.com/gui/file/{sha256}/detection'
 
                             await self.bot.send_message(chat_id=chat_id,
@@ -182,11 +183,23 @@ class FileScan:
             return
         if message.document['file_size'] > 19999999:
             return
-        try:
-            self.logger.debug("Download started for %s" % message)
-            await self.bot.download_file_by_id(document, temp)
-        except FileIsTooBig:
-            return
+        attempts = 4
+        while attempts:
+            try:
+                self.logger.debug("Download started for %s" % message)
+                await self.bot.download_file_by_id(document, temp)
+                break
+            except FileIsTooBig:
+                return
+            except aiogram.utils.exceptions.TelegramAPIError:
+                self.logger.debug('TelegramAPIError: retrying download')
+                await asyncio.sleep(5)
+                attempts -= 1
+                if attempts:
+                    continue
+                else:
+                    self.logger.debug('Failed to download %s, return' % message)
+                    return
 
         await self.process_file(temp,
                                 message.document['mime_type'],

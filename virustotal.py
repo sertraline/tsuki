@@ -7,10 +7,14 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.utils import ChromeType
+
+from src.logger import DebugLogging
 from time import sleep
 
 
-def worker(data):
+def worker(args):
+    data, logger = args
+
     path, mime, chat, m_id = data
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -19,24 +23,49 @@ def worker(data):
     driver = webdriver.Chrome(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install(),
                               chrome_options=chrome_options)
     driver.implicitly_wait(10)
+    logger.debug('GET https://virustotal.com')
     driver.get('https://virustotal.com')
 
+    logger.debug('Query selectors for upload form')
     btn = driver.execute_script(
         "return document.querySelector('home-view').shadowRoot."
         "querySelector('vt-ui-main-upload-form').shadowRoot."
         "querySelector('input')"
     )
     btn.send_keys(path)
-    sleep(5)
-    print('Return result')
-    result = driver.execute_script(
-        "return document.querySelector('file-view').shadowRoot."
-        "querySelector('vt-ui-main-generic-report').shadowRoot."
-        "querySelector('vt-ui-detections-widget').shadowRoot."
-        "querySelector('.positives').textContent"
-    )
+    attempts = 10
+    while attempts:
+        try:
+            if attempts == 10:
+                sleep(5)
+            else:
+                sleep(15)
+            logger.debug('Attempting to resolve scan result')
+            result = driver.execute_script(
+                "return document.querySelector('file-view').shadowRoot."
+                "querySelector('vt-ui-main-generic-report').shadowRoot."
+                "querySelector('vt-ui-detections-widget').shadowRoot."
+                "querySelector('.positives').textContent"
+            )
+            break
+        except:
+            logger.debug('Resolve failed, trying to find confirmation button')
+            try:
+                check_btn = driver.execute_script(
+                    "return document.querySelector('home-view').shadowRoot."
+                    "querySelector('vt-ui-main-upload-form').shadowRoot."
+                    "querySelector('#confirmUpload');"
+                )
+                logger.debug('Button found, click')
+                check_btn.click()
+                continue
+            except:
+                attempts -= 1
+                continue
+
     driver.close()
     driver.quit()
+    logger.debug('Return result: <%s>' % result)
     return result
 
 
@@ -55,9 +84,10 @@ async def push(result):
         )
 
 
-async def queue_checker():
+async def queue_checker(logger):
     loop = asyncio.get_event_loop()
     while True:
+        logger.debug('Virustotal: connected to RabbitMQ')
         connection = await aio_pika.connect_robust(
             "amqp://guest:guest@127.0.0.1/", loop=loop
         )
@@ -73,7 +103,8 @@ async def queue_checker():
                         data = message.body.decode('utf-8').split('\n')
                         if not os.path.isfile(data[0]):
                             continue
-                        future = await loop.run_in_executor(None, worker, data)
+                        logger.debug('Launch worker for %s' % data)
+                        future = await loop.run_in_executor(None, worker, [data, logger])
                         sha256_hash = hashlib.sha256()
                         with open(data[0], "rb") as f:
                             for byte_block in iter(lambda: f.read(4096), b""):
@@ -84,8 +115,10 @@ async def queue_checker():
 
 async def main():
     size = 2
-    for _ in range(size):
-        asyncio.get_event_loop().create_task(queue_checker())
+    logger = DebugLogging(True).logger
+    for i in range(size):
+        logger.debug('Create task %d' % i)
+        asyncio.get_event_loop().create_task(queue_checker(logger))
     while True:
         await asyncio.sleep(10)
 

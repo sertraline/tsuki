@@ -13,4 +13,4 @@ RUN python3 -m pip install --user -r requirements.txt
 RUN python3 patch_vt.py
 RUN bash -c "service postgresql start; sleep 10 && su postgres -c 'psql -f /tsuki/docker.sql'"
 
-CMD ["bash", "-c", "service redis-server start && service postgresql start && service rabbitmq-server start && python3 main.py"]
+CMD ["bash", "-c", "service redis-server start && service postgresql start && service rabbitmq-server start && ( python3 download_manager.py & ) && ( python3 virustotal.py & ) && python3 main.py"]

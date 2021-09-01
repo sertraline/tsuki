@@ -40,3 +40,4 @@ yarl==1.6.3
 exifread==2.3.2
 webdriver_manager
 selenium
+telethon
