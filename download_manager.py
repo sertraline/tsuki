@@ -46,6 +46,7 @@ async def push(result):
             aio_pika.Message(body=result.encode()),
             routing_key=routing_key,
         )
+    await connection.close()
 
 async def consumer(client, env):
     logger = DebugLogging(True).logger

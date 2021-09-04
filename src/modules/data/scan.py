@@ -77,6 +77,7 @@ class FileScan:
                                                         parse_mode=types.ParseMode.HTML)
 
             await asyncio.sleep(1)
+        await connection.close()
 
     async def publish_message(self, message):
         connection = await aio_pika.connect_robust(
@@ -92,6 +93,7 @@ class FileScan:
                 aio_pika.Message(body=message.encode()),
                 routing_key=routing_key,
             )
+        await connection.close()
 
     async def process_file(self, path, mime, chat, message_id):
         self.logger.debug('Processing file at path "%s"' % path)

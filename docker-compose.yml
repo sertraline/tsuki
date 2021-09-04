@@ -1,8 +1,8 @@
-version: '3'
-  
+version: "3.7"
 services:
   tsuki:
     image: tsuki:latest
+    init: true
     container_name: tsuki
     restart: on-failure
     volumes:

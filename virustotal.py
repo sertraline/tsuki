@@ -82,6 +82,7 @@ async def push(result):
             aio_pika.Message(body=result.encode()),
             routing_key=routing_key,
         )
+    await connection.close()
 
 
 async def queue_checker(logger):
@@ -111,6 +112,7 @@ async def queue_checker(logger):
                                 sha256_hash.update(byte_block)
                         await push(sha256_hash.hexdigest()+'\n'+future+'\n'+'\n'.join(data))
         await asyncio.sleep(5)
+        await connection.close()
 
 
 async def main():
