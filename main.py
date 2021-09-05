@@ -83,11 +83,13 @@ async def cleanup(content_dir, logger):
                         path := os.path.join(content_dir, f)
                 ).st_mtime < now - 5 * 60:
                     logger.debug("Removing %s" % path)
-                    shutil.rmtree(path)
+                    if os.path.isfile(path):
+                        os.remove(path)
+                    else:
+                        shutil.rmtree(path)
         except Exception as e:
-            print(e)
-        await asyncio.sleep(5 *
-                            60)
+            logger.critical(e)
+        await asyncio.sleep(5 * 60)
 
 
 def main():
